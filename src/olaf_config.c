@@ -79,7 +79,7 @@ Olaf_Config* olaf_config_default(void){
 	//max freq distance between two event points for fingerprint
 	config->maxFreqDistance = 128; //bins for fingerprint construction
 	
-	config->maxFingerprints=300;
+	config->maxFingerprints=3000000;
 
 	//maximum number of results
 	config->maxResults = 500000;
@@ -139,7 +139,7 @@ Olaf_Config* olaf_config_esp_32(void){
 	//Set lower to get faster results
 	config->maxEventPoints = 50;
 	config->eventPointThreshold = 30;
-	config->maxFingerprints = 30;
+	config->maxFingerprints = 3000000;
 
 	//The range around a hash to search
 	config->searchRange = 5;
@@ -162,7 +162,7 @@ Olaf_Config* olaf_config_mem(void){
 	Olaf_Config* config =  olaf_config_esp_32();
 
 	//Print more results
-	config->maxResults = 10;
+	config->maxResults = 500000;
 
 	//No streaming: print after end of file
 	config->printResultEvery = 0;//seconds
