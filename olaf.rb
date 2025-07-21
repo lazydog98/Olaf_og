@@ -440,6 +440,61 @@ def query_by_key
   end
 end
 
+def query_by_key_with_similarity
+  # Process arguments to extract keys and options
+  keys_and_files = []
+  force_fp = false
+  
+  # ARGV[0] is the command itself, so we start from ARGV[1]
+  # We need to shift ARGV to remove the command before processing
+  # However, the main script already shifts ARGV once, so we start from the current ARGV[0]
+  args_to_process = ARGV.dup # Create a duplicate to iterate and modify ARGV
+  args_to_process.each_with_index do |arg, index|
+    if arg == "--force-fp"
+      force_fp = true
+    elsif index > 0 # Skip the command itself
+      keys_and_files << arg
+    end
+  end
+
+  if keys_and_files.empty?
+    puts "Error: No keys or files provided."
+    puts "Usage: olaf query_by_key_with_similarity [--force-fp] key1 key2... or olaf query_by_key_with_similarity [--force-fp] file.txt"
+    exit(-1)
+  end
+  
+  # Build command arguments
+  cmd_args = [EXECUTABLE_LOCATION, 'query_by_key_with_similarity']
+  cmd_args << "--force-fp" if force_fp
+  cmd_args += keys_and_files
+  
+  # Check if executable exists
+  unless File.exist?(EXECUTABLE_LOCATION)
+    puts "Error: Olaf executable not found at #{EXECUTABLE_LOCATION}"
+    puts "Make sure Olaf is compiled and installed correctly"
+    exit(-1)
+  end
+  
+  # Execute the C command
+  begin
+    stdout, stderr, status = Open3.capture3(*cmd_args)
+    
+    # Print results
+    puts stdout unless stdout.empty?
+    STDERR.puts stderr unless stderr.empty?
+    
+    # Exit with same status as C command
+    if status && status.exitstatus
+      exit(status.exitstatus) if status.exitstatus != 0
+    else
+      puts "Error: Command execution failed"
+      exit(-1)
+    end
+  rescue => e
+    puts "Error executing command: #{e.message}"
+    exit(-1)
+  end
+end
 
 
 #create the db folders unless it exist
@@ -669,6 +724,12 @@ commands = {
     :help => "[--verbose] keys_or_files...",
     :needs_audio_files => false,
     :lambda => -> { query_by_key }
+  },
+  "query_by_key_with_similarity" => {
+    :description => "Query the database using fingerprint keys or audio IDs, with similarity scoring for fingerprints.\n\tFor fingerprint keys: use 64-bit hex (0x1234...) or decimal formats.\n\tFor audio IDs: use 32-bit decimal values (like from 'olaf stats').\n\t--force-fp: Treat all numeric inputs as 64-bit fingerprint keys, even if they appear to be 32-bit audio IDs.",
+    :help => "[--force-fp] keys_or_files...",
+    :needs_audio_files => false,
+    :lambda => -> { query_by_key_with_similarity }
   },
 
 }

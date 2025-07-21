@@ -95,9 +95,10 @@
 
 void olaf_print_help(const char* message){
 	fprintf(stderr,"%s",message);
-	fprintf(stderr,"\tolaf_c [query audio.raw audio.wav | print audio.raw audio.wav |store [raw_audio.raw audio.wav]... | stats | name_to_id file_name.mp3 | delete raw_audio.raw audio.wav | query_by_key key1 key2... | query_by_key file.txt ]\n");
+	fprintf(stderr,"\tolaf_c [query audio.raw audio.wav | print audio.raw audio.wav |store [raw_audio.raw audio.wav]... | stats | name_to_id file_name.mp3 | delete raw_audio.raw audio.wav | query_by_key key1 key2... | query_by_key file.txt | query_by_key_with_similarity [--force-fp] key1 key2... | query_by_key_with_similarity [--force-fp] file.txt ]\n");
 	fprintf(stderr,"\n");
 	fprintf(stderr,"\tquery_by_key: Query database using fingerprint keys or audio IDs\n");
+	fprintf(stderr,"\tquery_by_key_with_similarity: Query database using fingerprint keys or audio IDs, with similarity scoring for fingerprints.\n");
 	fprintf(stderr,"\t  - For fingerprint keys: 64-bit hex (0x1234ABCD...) or decimal\n");
 	fprintf(stderr,"\t  - For audio IDs: 32-bit decimal (from 'olaf stats' output)\n");
 	fprintf(stderr,"\t  - Can read from file: one key per line, # for comments\n");
@@ -207,6 +208,20 @@ bool olaf_validate_key_range(uint64_t key) {
 	// This function is mainly for consistency and future extensibility
 	(void)key; // Suppress unused parameter warning
 	return true;
+}
+
+/**
+ * Calculate the Hamming distance between two 64-bit integers
+ * This represents the number of differing bits.
+ */
+int olaf_hamming_distance(uint64_t a, uint64_t b) {
+    uint64_t x = a ^ b;
+    int distance = 0;
+    while (x > 0) {
+        x &= (x - 1);
+        distance++;
+    }
+    return distance;
 }
 
 /**
@@ -480,6 +495,132 @@ int olaf_query_by_key(int argc, const char* argv[]){
 	return 0;
 }
 
+int olaf_query_by_key_with_similarity(int argc, const char* argv[]){
+	Olaf_Config* config = olaf_config_default();
+	Olaf_DB* db = olaf_db_new(config->dbFolder,true);
+
+	if (argc < 3) {
+		fprintf(stderr, "Error: No keys provided. Usage: olaf_c query_by_key_with_similarity [--force-fp] key1 key2... or olaf_c query_by_key_with_similarity [--force-fp] file.txt\n");
+		fprintf(stderr, "  - For fingerprint keys: use 64-bit hex (0x1234...) or decimal values\n");
+		fprintf(stderr, "  - For audio IDs: use 32-bit decimal values (like from 'olaf stats')\n");
+		fprintf(stderr, "  - --force-fp: Treat all numeric inputs as 64-bit fingerprint keys, even if they appear to be 32-bit audio IDs.\n");
+		olaf_db_destroy(db);
+		olaf_config_destroy(config);
+		exit(-1);
+	}
+	
+	bool success = true;
+	bool force_fingerprint = false;
+	int start_arg_index = 2;
+
+	// Check for --force-fp flag
+	if (argc > 2 && strcmp(argv[2], "--force-fp") == 0) {
+		force_fingerprint = true;
+		start_arg_index = 3; // Start processing keys from the next argument
+		if (argc < 4) { // If only --force-fp is provided without keys
+			fprintf(stderr, "Error: No keys provided after --force-fp. Usage: olaf_c query_by_key_with_similarity [--force-fp] key1 key2... or olaf_c query_by_key_with_similarity [--force-fp] file.txt\n");
+			olaf_db_destroy(db);
+			olaf_config_destroy(config);
+			exit(-1);
+		}
+	}
+	
+	for(int arg_index = start_arg_index ; arg_index < argc ; arg_index++){
+		const char* arg = argv[arg_index];
+		
+		// Check if this looks like a filename
+		if (olaf_looks_like_filename(arg)) {
+			// If --force-fp is used, we don't process files for similarity, only direct keys
+			if (force_fingerprint) {
+				fprintf(stderr, "Warning: --force-fp flag is active. Skipping file '%s' as it cannot be treated as a single fingerprint key.\n", arg);
+				success = false;
+				continue;
+			}
+			// Try to process as a file
+			if (!olaf_process_keys_from_file_with_metadata(db, arg, true)) { // Pass verbose true for similarity output
+				// If file processing fails, try as a regular key (should not happen for files)
+				fprintf(stderr, "Error processing file: %s\n", arg);
+				success = false;
+			}
+		} else {
+			// Parse the argument to determine if it's a fingerprint key or audio_id
+			uint64_t parsed_value;
+			if (olaf_parse_key(arg, &parsed_value)) {
+				if (force_fingerprint || parsed_value > UINT32_MAX) {
+					// Treat as fingerprint key (either forced or naturally 64-bit)
+					printf("Interpreting %s as fingerprint key (forced: %s)\n", arg, force_fingerprint ? "true" : "false");
+					
+					// --- Similarity Search Logic ---
+					uint64_t search_key = parsed_value;
+					int search_range = 5; // Define a small search range for Hamming distance
+					uint64_t results[100]; // Buffer for results
+					
+					// Search for keys within a small range
+					size_t num_results = olaf_db_find(db, search_key - search_range, search_key + search_range, results, 100);
+					
+					printf("  Searching for similar fingerprints to 0x%016llX (%llu) within range %d:\n", (unsigned long long)search_key, (unsigned long long)search_key, search_range);
+					
+					if (num_results == 0) {
+						printf("    No similar fingerprints found within the search range.\n");
+					} else {
+						for (size_t i = 0; i < num_results; i++) {
+							uint64_t matched_key = results[i];
+							int hamming_dist = olaf_hamming_distance(search_key, matched_key);
+							
+							// Define a threshold for "similarity" (e.g., max 10 bits difference for 64-bit keys)
+							int max_acceptable_hamming_distance = 10; 
+							
+							if (hamming_dist <= max_acceptable_hamming_distance) {
+								// Calculate similarity percentage (higher is better)
+								// Max possible hamming distance for 64-bit is 64
+								double similarity_percentage = ((double)(64 - hamming_dist) / 64.0) * 100.0;
+								
+								uint32_t audio_id = (uint32_t)(matched_key & 0xFFFFFFFF);
+								uint32_t timestamp = (uint32_t)(matched_key >> 32);
+								
+								printf("    Match: 0x%016llX (Hamming Distance: %d, Similarity: %.2f%%), audio_id=%u, timestamp=%u\n", 
+									(unsigned long long)matched_key, hamming_dist, similarity_percentage, audio_id, timestamp);
+								
+								// Optionally, fetch and display metadata for the matched audio_id
+								if (olaf_db_has_meta_data(db, &audio_id)) {
+									Olaf_Resource_Meta_data metadata;
+									olaf_db_find_meta_data(db, &audio_id, &metadata);
+									printf("      File: \"%s\", Duration: %.3fs\n", metadata.path, metadata.duration);
+								}
+							} else {
+								// Optionally, print keys that are found in range but not "similar" enough
+								// printf("    Found 0x%016llX (Hamming Distance: %d), but not similar enough.\n", (unsigned long long)matched_key, hamming_dist);
+							}
+						}
+					}
+					printf("\n");
+					// --- End Similarity Search Logic ---
+
+				} else {
+					// Treat as audio_id (only if not forced to be fingerprint)
+					uint32_t audio_id = (uint32_t)parsed_value;
+					printf("Interpreting %s as audio_id: %u\n", arg, audio_id);
+					if (!olaf_process_audio_id(db, audio_id, true)) {
+						success = false;
+					}
+				}
+			} else {
+				success = false;
+			}
+		}
+	}
+
+	olaf_db_destroy(db);
+	olaf_config_destroy(config);
+	
+	if (!success) {
+		exit(-1);
+	}
+	
+	exit(0);
+	return 0;
+}
+
 int main(int argc, const char* argv[]){
 
 	if(argc < 2){
@@ -510,6 +651,8 @@ int main(int argc, const char* argv[]){
 		olaf_store_cached(argc,argv);
 	} else if(strcmp(command,"query_by_key") == 0){
 		olaf_query_by_key(argc,argv);
+	} else if(strcmp(command,"query_by_key_with_similarity") == 0){
+		olaf_query_by_key_with_similarity(argc,argv);
 	} else {
 		fprintf(stderr,"%s Unknown command: \n",command);
 		olaf_print_help("Unknown command\n");
