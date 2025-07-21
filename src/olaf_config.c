@@ -134,7 +134,7 @@ Olaf_Config* olaf_config_esp_32(void){
 	//config->halfFilterSizeTime=config->filterSizeTime/2;
 
 	//Not much results expected
-	config->maxResults = 20;
+	config->maxResults = 500000;
 
 	//Set lower to get faster results
 	config->maxEventPoints = 50;
@@ -145,7 +145,7 @@ Olaf_Config* olaf_config_esp_32(void){
 	config->searchRange = 5;
 
 	//We do not expect much collisions
-	config->maxDBCollisions = 50;//for larger data sets use around 2000
+	config->maxDBCollisions = 2000000;//for larger data sets use around 2000
 	
 	//report matches quicker
 	config->minMatchCount = 4;
