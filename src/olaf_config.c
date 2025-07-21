@@ -82,7 +82,7 @@ Olaf_Config* olaf_config_default(void){
 	config->maxFingerprints=300;
 
 	//maximum number of results
-	config->maxResults = 50;
+	config->maxResults = 500000;
 
 	//The range around a hash to search
 	config->searchRange = 5;
@@ -101,7 +101,7 @@ Olaf_Config* olaf_config_default(void){
 	config->printResultEvery = 0;//seconds
 	
 	//number of matches (hash collisions) 
-	config->maxDBCollisions = 2000;//for larger data sets use around 2000
+	config->maxDBCollisions = 2000000;//for larger data sets use around 2000
 
 	return config;
 }
