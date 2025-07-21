@@ -228,7 +228,7 @@ int olaf_hamming_distance(uint64_t a, uint64_t b) {
  * Process a single key string and query the database with optional metadata
  * Returns true on success, false on error
  */
-bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, bool verbose, bool perform_similarity_search) {
+bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, bool verbose, bool perform_similarity_search, Olaf_Config* config) {
 	uint64_t key;
 
 	
@@ -248,10 +248,10 @@ bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, 
 	if (perform_similarity_search) {
 		// --- Similarity Search Logic ---
 		int search_range = 5; // Define a small search range for Hamming distance
-		uint64_t results[100]; // Buffer for results
+		uint64_t* results = (uint64_t*)malloc(config->maxDBCollisions * sizeof(uint64_t)); // Dynamic buffer for results
 		
 		// Search for keys within a small range
-		size_t num_results = olaf_db_find(db, key - search_range, key + search_range, results, 100);
+		size_t num_results = olaf_db_find(db, key - search_range, key + search_range, results, config->maxDBCollisions);
 		
 		printf("  Searching for similar fingerprints within range %d:\n", search_range);
 		
@@ -288,10 +288,12 @@ bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, 
 				}
 			}
 		}
+		
+		free(results); // Clean up dynamic allocation
 	} else {
 		// --- Exact Match Logic (Original behavior) ---
-		uint64_t results[100]; // Buffer for results
-		size_t num_results = olaf_db_find(db, key, key, results, 100);
+		uint64_t* results = (uint64_t*)malloc(config->maxDBCollisions * sizeof(uint64_t)); // Dynamic buffer for results
+		size_t num_results = olaf_db_find(db, key, key, results, config->maxDBCollisions);
 		
 		if (num_results == 0) {
 			printf("  No matches found\n");
@@ -317,6 +319,8 @@ bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, 
 				}
 			}
 		}
+		
+		free(results); // Clean up dynamic allocation
 	}
 	printf("\n");
 	
@@ -327,15 +331,15 @@ bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, 
  * Process a single key string and query the database
  * Returns true on success, false on error
  */
-bool olaf_process_single_key(Olaf_DB* db, const char* key_string) {
-	return olaf_process_single_key_with_metadata(db, key_string, false, false);
+bool olaf_process_single_key(Olaf_DB* db, const char* key_string, Olaf_Config* config) {
+	return olaf_process_single_key_with_metadata(db, key_string, false, false, config);
 }
 
 /**
  * Read keys from a file and process them with optional metadata
  * Returns true on success, false on error
  */
-bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename, bool verbose, bool perform_similarity_search) {
+bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename, bool verbose, bool perform_similarity_search, Olaf_Config* config) {
 	FILE* file = fopen(filename, "r");
 
 	if (!file) {
@@ -363,7 +367,7 @@ bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename
 		
 		// Process the key
 		printf("Processing line %d: %s\n", line_number, line);
-		if (!olaf_process_single_key_with_metadata(db, line, verbose, perform_similarity_search)) {
+		if (!olaf_process_single_key_with_metadata(db, line, verbose, perform_similarity_search, config)) {
 			fprintf(stderr, "Error processing key on line %d: %s\n", line_number, line);
 			success = false;
 		}
@@ -377,8 +381,8 @@ bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename
  * Read keys from a file and process them
  * Returns true on success, false on error
  */
-bool olaf_process_keys_from_file(Olaf_DB* db, const char* filename) {
-	return olaf_process_keys_from_file_with_metadata(db, filename, false, false);
+bool olaf_process_keys_from_file(Olaf_DB* db, const char* filename, Olaf_Config* config) {
+	return olaf_process_keys_from_file_with_metadata(db, filename, false, false, config);
 }
 
 // Similarity matching temporarily disabled to fix segmentation fault
@@ -498,10 +502,10 @@ int olaf_query_by_key(int argc, const char* argv[]){
 		// Check if this looks like a filename
 		if (olaf_looks_like_filename(arg)) {
 			// Try to process as a file
-			if (!olaf_process_keys_from_file(db, arg)) {
+			if (!olaf_process_keys_from_file(db, arg, config)) {
 				// If file processing fails, try as a regular key
 				printf("File processing failed, trying as key: %s\n", arg);
-				if (!olaf_process_single_key(db, arg)) {
+				if (!olaf_process_single_key(db, arg, config)) {
 					success = false;
 				}
 			}
@@ -520,7 +524,7 @@ int olaf_query_by_key(int argc, const char* argv[]){
 				} else {
 					// Treat as fingerprint key
 					printf("Interpreting %s as fingerprint key\n", arg);
-					if (!olaf_process_single_key(db, arg)) {
+					if (!olaf_process_single_key(db, arg, config)) {
 						success = false;
 					}
 				}
@@ -583,10 +587,10 @@ int olaf_query_by_key_with_similarity(int argc, const char* argv[]){
 				continue;
 			}
 			// Try to process as a file
-			if (!olaf_process_keys_from_file_with_metadata(db, arg, true, true)) { // Pass verbose true and perform_similarity_search true
+			if (!olaf_process_keys_from_file_with_metadata(db, arg, true, true, config)) { // Pass verbose true and perform_similarity_search true
 				// If file processing fails, try as a regular key
 				printf("File processing failed, trying as key: %s\n", arg);
-				if (!olaf_process_single_key_with_metadata(db, arg, true, true)) { // Pass verbose true and perform_similarity_search true
+				if (!olaf_process_single_key_with_metadata(db, arg, true, true, config)) { // Pass verbose true and perform_similarity_search true
 					success = false;
 				}
 			}
@@ -599,7 +603,7 @@ int olaf_query_by_key_with_similarity(int argc, const char* argv[]){
 					printf("Interpreting %s as fingerprint key (forced: %s)\n", arg, force_fingerprint ? "true" : "false");
 					
 					// Perform similarity search for this key
-					if (!olaf_process_single_key_with_metadata(db, arg, true, true)) { // Pass verbose true and perform_similarity_search true
+					if (!olaf_process_single_key_with_metadata(db, arg, true, true, config)) { // Pass verbose true and perform_similarity_search true
 						success = false;
 					}
 
