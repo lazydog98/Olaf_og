@@ -228,8 +228,10 @@ int olaf_hamming_distance(uint64_t a, uint64_t b) {
  * Process a single key string and query the database with optional metadata
  * Returns true on success, false on error
  */
-bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, bool verbose) {
+bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, bool verbose, bool perform_similarity_search) {
+	printf("DEBUG: olaf_process_single_key_with_metadata - perform_similarity_search: %d\n", perform_similarity_search);
 	uint64_t key;
+
 	
 	// Parse the key
 	if (!olaf_parse_key(key_string, &key)) {
@@ -242,34 +244,78 @@ bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, 
 		return false;
 	}
 	
-	// Query the database for this key
-	// For now, we'll use the key as both start and stop for exact match
-	uint64_t results[100]; // Buffer for results
-	size_t num_results = olaf_db_find(db, key, key, results, 100);
-	
-	// Display results
 	printf("Key: 0x%016llX (%llu)\n", (unsigned long long)key, (unsigned long long)key);
-	if (num_results == 0) {
-		printf("  No matches found\n");
-	} else {
-		for (size_t i = 0; i < num_results; i++) {
-			uint64_t value = results[i];
-			uint32_t audio_id = (uint32_t)(value & 0xFFFFFFFF);
-			uint32_t timestamp = (uint32_t)(value >> 32);
-			
-			if (verbose) {
-				// Try to get metadata for this audio_id
-				if (olaf_db_has_meta_data(db, &audio_id)) {
-					Olaf_Resource_Meta_data metadata;
-					olaf_db_find_meta_data(db, &audio_id, &metadata);
-					printf("  Match: audio_id=%u, timestamp=%u, file=\"%s\", duration=%.3fs\n", 
-						   audio_id, timestamp, metadata.path, metadata.duration);
+
+	if (perform_similarity_search) {
+		// --- Similarity Search Logic ---
+		int search_range = 5; // Define a small search range for Hamming distance
+		uint64_t results[100]; // Buffer for results
+		
+		// Search for keys within a small range
+		size_t num_results = olaf_db_find(db, key - search_range, key + search_range, results, 100);
+		
+		printf("  Searching for similar fingerprints within range %d:\n", search_range);
+		
+		if (num_results == 0) {
+			printf("    No similar fingerprints found within the search range.\n");
+		} else {
+			for (size_t i = 0; i < num_results; i++) {
+				uint64_t matched_key = results[i];
+				int hamming_dist = olaf_hamming_distance(key, matched_key);
+				
+				// Define a threshold for "similarity" (e.g., max 10 bits difference for 34-bit keys)
+				int max_acceptable_hamming_distance = 10; 
+				
+				if (hamming_dist <= max_acceptable_hamming_distance) {
+					// Calculate similarity percentage (higher is better)
+					// Max possible hamming distance for 34-bit is 34
+					double similarity_percentage = ((double)(34 - hamming_dist) / 34.0) * 100.0;
+					
+					uint32_t audio_id = (uint32_t)(matched_key & 0xFFFFFFFF);
+					uint32_t timestamp = (uint32_t)(matched_key >> 32);
+					
+					printf("    Match: 0x%016llX (Hamming Distance: %d, Similarity: %.2f%%), audio_id=%u, timestamp=%u\n", 
+						   (unsigned long long)matched_key, hamming_dist, similarity_percentage, audio_id, timestamp);
+					
+					// Optionally, fetch and display metadata for the matched audio_id
+					if (verbose && olaf_db_has_meta_data(db, &audio_id)) {
+						Olaf_Resource_Meta_data metadata;
+						olaf_db_find_meta_data(db, &audio_id, &metadata);
+						printf("      File: \"%s\", Duration: %.3fs\n", metadata.path, metadata.duration);
+					}
 				} else {
-					printf("  Match: audio_id=%u, timestamp=%u, file=<unknown>, duration=<unknown>\n", 
-						   audio_id, timestamp);
+					// Optionally, print keys that are found in range but not "similar" enough
+					// printf("    Found 0x%016llX (Hamming Distance: %d), but not similar enough.\n", (unsigned long long)matched_key, hamming_dist);
 				}
-			} else {
-				printf("  Match: audio_id=%u, timestamp=%u\n", audio_id, timestamp);
+			}
+		}
+	} else {
+		// --- Exact Match Logic (Original behavior) ---
+		uint64_t results[100]; // Buffer for results
+		size_t num_results = olaf_db_find(db, key, key, results, 100);
+		
+		if (num_results == 0) {
+			printf("  No matches found\n");
+		} else {
+			for (size_t i = 0; i < num_results; i++) {
+				uint64_t value = results[i];
+				uint32_t audio_id = (uint32_t)(value & 0xFFFFFFFF);
+				uint32_t timestamp = (uint32_t)(value >> 32);
+				
+				if (verbose) {
+					// Try to get metadata for this audio_id
+					if (olaf_db_has_meta_data(db, &audio_id)) {
+						Olaf_Resource_Meta_data metadata;
+						olaf_db_find_meta_data(db, &audio_id, &metadata);
+						printf("  Match: audio_id=%u, timestamp=%u, file=\"%s\", duration=%.3fs\n", 
+							   audio_id, timestamp, metadata.path, metadata.duration);
+					} else {
+						printf("  Match: audio_id=%u, timestamp=%u, file=<unknown>, duration=<unknown>\n", 
+							   audio_id, timestamp);
+					}
+				} else {
+					printf("  Match: audio_id=%u, timestamp=%u\n", audio_id, timestamp);
+				}
 			}
 		}
 	}
@@ -283,15 +329,17 @@ bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, 
  * Returns true on success, false on error
  */
 bool olaf_process_single_key(Olaf_DB* db, const char* key_string) {
-	return olaf_process_single_key_with_metadata(db, key_string, false);
+	return olaf_process_single_key_with_metadata(db, key_string, false, false);
 }
 
 /**
  * Read keys from a file and process them with optional metadata
  * Returns true on success, false on error
  */
-bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename, bool verbose) {
+bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename, bool verbose, bool perform_similarity_search) {
+	printf("DEBUG: olaf_process_keys_from_file_with_metadata - perform_similarity_search: %d\n", perform_similarity_search);
 	FILE* file = fopen(filename, "r");
+
 	if (!file) {
 		fprintf(stderr, "Error: Could not open file '%s': %s\n", filename, strerror(errno));
 		return false;
@@ -317,7 +365,7 @@ bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename
 		
 		// Process the key
 		printf("Processing line %d: %s\n", line_number, line);
-		if (!olaf_process_single_key_with_metadata(db, line, verbose)) {
+		if (!olaf_process_single_key_with_metadata(db, line, verbose, perform_similarity_search)) {
 			fprintf(stderr, "Error processing key on line %d: %s\n", line_number, line);
 			success = false;
 		}
@@ -332,7 +380,7 @@ bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename
  * Returns true on success, false on error
  */
 bool olaf_process_keys_from_file(Olaf_DB* db, const char* filename) {
-	return olaf_process_keys_from_file_with_metadata(db, filename, false);
+	return olaf_process_keys_from_file_with_metadata(db, filename, false, false);
 }
 
 // Similarity matching temporarily disabled to fix segmentation fault
@@ -537,10 +585,12 @@ int olaf_query_by_key_with_similarity(int argc, const char* argv[]){
 				continue;
 			}
 			// Try to process as a file
-			if (!olaf_process_keys_from_file_with_metadata(db, arg, true)) { // Pass verbose true for similarity output
-				// If file processing fails, try as a regular key (should not happen for files)
-				fprintf(stderr, "Error processing file: %s\n", arg);
-				success = false;
+			if (!olaf_process_keys_from_file_with_metadata(db, arg, true, true)) { // Pass verbose true and perform_similarity_search true
+				// If file processing fails, try as a regular key
+				printf("File processing failed, trying as key: %s\n", arg);
+				if (!olaf_process_single_key_with_metadata(db, arg, true, true)) { // Pass verbose true and perform_similarity_search true
+					success = false;
+				}
 			}
 		} else {
 			// Parse the argument to determine if it's a fingerprint key or audio_id
@@ -550,51 +600,10 @@ int olaf_query_by_key_with_similarity(int argc, const char* argv[]){
 					// Treat as fingerprint key (either forced or naturally 64-bit)
 					printf("Interpreting %s as fingerprint key (forced: %s)\n", arg, force_fingerprint ? "true" : "false");
 					
-					// --- Similarity Search Logic ---
-					uint64_t search_key = parsed_value;
-					int search_range = 5; // Define a small search range for Hamming distance
-					uint64_t results[100]; // Buffer for results
-					
-					// Search for keys within a small range
-					size_t num_results = olaf_db_find(db, search_key - search_range, search_key + search_range, results, 100);
-					
-					printf("  Searching for similar fingerprints to 0x%016llX (%llu) within range %d:\n", (unsigned long long)search_key, (unsigned long long)search_key, search_range);
-					
-					if (num_results == 0) {
-						printf("    No similar fingerprints found within the search range.\n");
-					} else {
-						for (size_t i = 0; i < num_results; i++) {
-							uint64_t matched_key = results[i];
-							int hamming_dist = olaf_hamming_distance(search_key, matched_key);
-							
-							// Define a threshold for "similarity" (e.g., max 10 bits difference for 64-bit keys)
-							int max_acceptable_hamming_distance = 10; 
-							
-							if (hamming_dist <= max_acceptable_hamming_distance) {
-								// Calculate similarity percentage (higher is better)
-								// Max possible hamming distance for 64-bit is 64
-								double similarity_percentage = ((double)(34 - hamming_dist) / 34.0) * 100.0;
-								
-								uint32_t audio_id = (uint32_t)(matched_key & 0xFFFFFFFF);
-								uint32_t timestamp = (uint32_t)(matched_key >> 32);
-								
-								printf("    Match: 0x%016llX (Hamming Distance: %d, Similarity: %.2f%%), audio_id=%u, timestamp=%u\n", 
-									(unsigned long long)matched_key, hamming_dist, similarity_percentage, audio_id, timestamp);
-								
-								// Optionally, fetch and display metadata for the matched audio_id
-								if (olaf_db_has_meta_data(db, &audio_id)) {
-									Olaf_Resource_Meta_data metadata;
-									olaf_db_find_meta_data(db, &audio_id, &metadata);
-									printf("      File: \"%s\", Duration: %.3fs\n", metadata.path, metadata.duration);
-								}
-							} else {
-								// Optionally, print keys that are found in range but not "similar" enough
-								// printf("    Found 0x%016llX (Hamming Distance: %d), but not similar enough.\n", (unsigned long long)matched_key, hamming_dist);
-							}
-						}
+					// Perform similarity search for this key
+					if (!olaf_process_single_key_with_metadata(db, arg, true, true)) { // Pass verbose true and perform_similarity_search true
+						success = false;
 					}
-					printf("\n");
-					// --- End Similarity Search Logic ---
 
 				} else {
 					// Treat as audio_id (only if not forced to be fingerprint)
