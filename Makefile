@@ -21,7 +21,7 @@ compile:
 	gcc -c src/olaf_fp_matcher.c 		-W -Wall -std=c11 -pedantic -O2
 	gcc -c src/olaf_config.c 			-W -Wall -std=c11 -pedantic -O2
 	mkdir -p bin
-	gcc -o bin/olaf_c *.o 			-lc -lm -ffast-math -pthread
+	gcc -o bin/olaf_c *.o 			 -lm -ffast-math -pthread
 
 lib:
 	gcc -c src/pffft.c 					-W -Wall -fPIC -std=gnu11 -pedantic -O2 #pfft needs M_PI and other constants not in the ANSI c standard
@@ -45,7 +45,7 @@ lib:
 	gcc -c src/olaf_config.c 			-W -Wall -fPIC -std=c11 -pedantic -O2
 	gcc -c src/olaf_fft.c 				-W -Wall -fPIC -std=c11 -pedantic -O2
 	mkdir -p bin
-	gcc -o bin/libolaf.so *.o 			-lc -lm -fPIC -ffast-math -pthread -shared
+	gcc -o bin/libolaf.so *.o 			 -lm -fPIC -ffast-math -pthread -shared
 
 #A compilation with support for profiling
 compile_gprof:
@@ -69,7 +69,7 @@ compile_gprof:
 	gcc -c src/olaf_fp_matcher.c 		-pg -W -Wall -std=c11 -pedantic -O2
 	gcc -c src/olaf_config.c 			-pg -W -Wall -std=c11 -pedantic -O2
 	mkdir -p bin
-	gcc -o bin/olaf_c *.o 			-pg -lc -lm -ffast-math -pthread
+	gcc -o bin/olaf_c *.o 			-pg  -lm -ffast-math -pthread
 
 #The memory database version is equal to the embedded version
 #pass the -D to load the correct 
@@ -92,7 +92,7 @@ mem:
 	gcc -c src/olaf_fp_matcher.c 		 -Dmem -W -Wall -std=c11 -pedantic -O2
 	gcc -c src/olaf_config.c 			 -Dmem -W -Wall -std=c11 -pedantic -O2
 	mkdir -p bin
-	gcc -o bin/olaf_mem *.o 			-lc -lm -ffast-math
+	gcc -o bin/olaf_mem *.o 			 -lm -ffast-math
 
 # -s MODULARIZE=1  \
 #		-s WASM=1 \
@@ -119,7 +119,7 @@ web:
 		src/olaf_db_mem.c \
 		src/olaf_fp_db_writer_mem.c \
 		src/olaf_fp_matcher.c \
-		src/olaf_config.c  -O3 -Wall -lm -lc -W -I. -ffast-math
+		src/olaf_config.c  -O3 -Wall -lm  -W -I. -ffast-math
 		echo "//Hack to force resampler to create functions" > wasm/js/olaf_processor.js
 		echo "let exports = [];" >> wasm/js/olaf_processor.js
 		cat wasm/js/olaf.js wasm/js/olaf_processor_edit.js >> wasm/js/olaf_processor.js
@@ -177,7 +177,7 @@ test:
 	gcc -c src/mdb.c 					-W -Wall -std=c11 -pedantic -O2
 	gcc -c src/olaf_db.c 			-W -Wall -std=c11 -pedantic -O2
 	mkdir -p bin
-	gcc -o bin/olaf_tests *.o		-lc -lm -ffast-math
+	gcc -o bin/olaf_tests *.o		 -lm -ffast-math
 	mkdir -p tests/olaf_test_db
 	- rm tests/olaf_test_db/*
 

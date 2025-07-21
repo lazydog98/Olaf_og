@@ -84,6 +84,8 @@
 #include <assert.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <limits.h>
 
 #include "olaf_stream_processor.h"
 #include "olaf_runner.h"
@@ -93,8 +95,237 @@
 
 void olaf_print_help(const char* message){
 	fprintf(stderr,"%s",message);
-	fprintf(stderr,"\tolaf_c [query audio.raw audio.wav | print audio.raw audio.wav |store [raw_audio.raw audio.wav]... | stats | name_to_id file_name.mp3 | delete raw_audio.raw audio.wav ]\n");
+	fprintf(stderr,"\tolaf_c [query audio.raw audio.wav | print audio.raw audio.wav |store [raw_audio.raw audio.wav]... | stats | name_to_id file_name.mp3 | delete raw_audio.raw audio.wav | query_by_key key1 key2... | query_by_key file.txt ]\n");
+	fprintf(stderr,"\n");
+	fprintf(stderr,"\tquery_by_key: Query database using fingerprint keys directly\n");
+	fprintf(stderr,"\t  - Supports hex format: 0x1234ABCD or 1234ABCD\n");
+	fprintf(stderr,"\t  - Supports decimal format: 1234567890\n");
+	fprintf(stderr,"\t  - Can read from file: one key per line, # for comments\n");
 	exit(-10);
+}
+
+/**
+ * Parse a hexadecimal key string to uint64_t
+ * Supports both "0x1234..." and "1234..." formats
+ * Returns true on success, false on error
+ */
+bool olaf_parse_hex_key(const char* key_string, uint64_t* result) {
+	if (!key_string || !result) {
+		return false;
+	}
+	
+	char* endptr;
+	errno = 0;
+	
+	// Handle both "0x" prefixed and non-prefixed hex strings
+	if (strncmp(key_string, "0x", 2) == 0 || strncmp(key_string, "0X", 2) == 0) {
+		*result = strtoull(key_string, &endptr, 16);
+	} else {
+		// Assume it's hex without prefix
+		*result = strtoull(key_string, &endptr, 16);
+	}
+	
+	// Check for conversion errors
+	if (errno == ERANGE) {
+		fprintf(stderr, "Error: Key '%s' exceeds maximum value for 64-bit integer\n", key_string);
+		return false;
+	}
+	
+	if (endptr == key_string || *endptr != '\0') {
+		fprintf(stderr, "Error: Invalid hexadecimal key format '%s'. Expected format: 0x1234ABCD or 1234ABCD\n", key_string);
+		return false;
+	}
+	
+	return true;
+}
+
+/**
+ * Parse a decimal key string to uint64_t
+ * Returns true on success, false on error
+ */
+bool olaf_parse_decimal_key(const char* key_string, uint64_t* result) {
+	if (!key_string || !result) {
+		return false;
+	}
+	
+	char* endptr;
+	errno = 0;
+	
+	*result = strtoull(key_string, &endptr, 10);
+	
+	// Check for conversion errors
+	if (errno == ERANGE) {
+		fprintf(stderr, "Error: Key '%s' exceeds maximum value for 64-bit integer\n", key_string);
+		return false;
+	}
+	
+	if (endptr == key_string || *endptr != '\0') {
+		fprintf(stderr, "Error: Invalid decimal key format '%s'. Expected numeric format: 1234567890\n", key_string);
+		return false;
+	}
+	
+	return true;
+}
+
+/**
+ * Parse a key string in either hexadecimal or decimal format
+ * Auto-detects format based on prefix and content
+ * Returns true on success, false on error
+ */
+bool olaf_parse_key(const char* key_string, uint64_t* result) {
+	if (!key_string || !result) {
+		return false;
+	}
+	
+	// Check if it looks like hex (starts with 0x or contains hex digits)
+	if (strncmp(key_string, "0x", 2) == 0 || strncmp(key_string, "0X", 2) == 0) {
+		return olaf_parse_hex_key(key_string, result);
+	}
+	
+	// Check if string contains hex characters (A-F, a-f)
+	bool has_hex_chars = false;
+	for (const char* p = key_string; *p; p++) {
+		if ((*p >= 'A' && *p <= 'F') || (*p >= 'a' && *p <= 'f')) {
+			has_hex_chars = true;
+			break;
+		}
+	}
+	
+	if (has_hex_chars) {
+		return olaf_parse_hex_key(key_string, result);
+	} else {
+		return olaf_parse_decimal_key(key_string, result);
+	}
+}
+
+/**
+ * Validate that a key is within valid range for uint64_t
+ * Returns true if valid, false otherwise
+ */
+bool olaf_validate_key_range(uint64_t key) {
+	// For uint64_t, all values from 0 to UINT64_MAX are valid
+	// This function is mainly for consistency and future extensibility
+	(void)key; // Suppress unused parameter warning
+	return true;
+}
+
+/**
+ * Process a single key string and query the database with optional metadata
+ * Returns true on success, false on error
+ */
+bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, bool verbose) {
+	uint64_t key;
+	
+	// Parse the key
+	if (!olaf_parse_key(key_string, &key)) {
+		return false;
+	}
+	
+	// Validate key range
+	if (!olaf_validate_key_range(key)) {
+		fprintf(stderr, "Error: Key value out of valid range\n");
+		return false;
+	}
+	
+	// Query the database for this key
+	// For now, we'll use the key as both start and stop for exact match
+	uint64_t results[100]; // Buffer for results
+	size_t num_results = olaf_db_find(db, key, key, results, 100);
+	
+	// Display results
+	printf("Key: 0x%016llX (%llu)\n", (unsigned long long)key, (unsigned long long)key);
+	if (num_results == 0) {
+		printf("  No matches found\n");
+	} else {
+		for (size_t i = 0; i < num_results; i++) {
+			uint64_t value = results[i];
+			uint32_t audio_id = (uint32_t)(value & 0xFFFFFFFF);
+			uint32_t timestamp = (uint32_t)(value >> 32);
+			
+			if (verbose) {
+				// Try to get metadata for this audio_id
+				if (olaf_db_has_meta_data(db, &audio_id)) {
+					Olaf_Resource_Meta_data metadata;
+					olaf_db_find_meta_data(db, &audio_id, &metadata);
+					printf("  Match: audio_id=%u, timestamp=%u, file=\"%s\", duration=%.3fs\n", 
+						   audio_id, timestamp, metadata.path, metadata.duration);
+				} else {
+					printf("  Match: audio_id=%u, timestamp=%u, file=<unknown>, duration=<unknown>\n", 
+						   audio_id, timestamp);
+				}
+			} else {
+				printf("  Match: audio_id=%u, timestamp=%u\n", audio_id, timestamp);
+			}
+		}
+	}
+	printf("\n");
+	
+	return true;
+}
+
+/**
+ * Process a single key string and query the database
+ * Returns true on success, false on error
+ */
+bool olaf_process_single_key(Olaf_DB* db, const char* key_string) {
+	return olaf_process_single_key_with_metadata(db, key_string, false);
+}
+
+/**
+ * Read keys from a file and process them with optional metadata
+ * Returns true on success, false on error
+ */
+bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename, bool verbose) {
+	FILE* file = fopen(filename, "r");
+	if (!file) {
+		fprintf(stderr, "Error: Could not open file '%s': %s\n", filename, strerror(errno));
+		return false;
+	}
+	
+	char line[256];
+	int line_number = 0;
+	bool success = true;
+	
+	while (fgets(line, sizeof(line), file)) {
+		line_number++;
+		
+		// Remove trailing newline
+		size_t len = strlen(line);
+		if (len > 0 && line[len-1] == '\n') {
+			line[len-1] = '\0';
+		}
+		
+		// Skip empty lines and comments
+		if (strlen(line) == 0 || line[0] == '#') {
+			continue;
+		}
+		
+		// Process the key
+		printf("Processing line %d: %s\n", line_number, line);
+		if (!olaf_process_single_key_with_metadata(db, line, verbose)) {
+			fprintf(stderr, "Error processing key on line %d: %s\n", line_number, line);
+			success = false;
+		}
+	}
+	
+	fclose(file);
+	return success;
+}
+
+/**
+ * Read keys from a file and process them
+ * Returns true on success, false on error
+ */
+bool olaf_process_keys_from_file(Olaf_DB* db, const char* filename) {
+	return olaf_process_keys_from_file_with_metadata(db, filename, false);
+}
+
+/**
+ * Check if a string looks like a filename (contains . or /)
+ * Returns true if it looks like a filename, false otherwise
+ */
+bool olaf_looks_like_filename(const char* arg) {
+	return (strchr(arg, '.') != NULL || strchr(arg, '/') != NULL || strchr(arg, '\\') != NULL);
 }
 
 int olaf_stats(void){
@@ -146,6 +377,51 @@ int olaf_store_cached(int argc, const char* argv[]){
 	return 0;
 }
 
+int olaf_query_by_key(int argc, const char* argv[]){
+	Olaf_Config* config = olaf_config_default();
+	Olaf_DB* db = olaf_db_new(config->dbFolder,true);
+
+	if (argc < 3) {
+		fprintf(stderr, "Error: No keys provided. Usage: olaf_c query_by_key key1 key2... or olaf_c query_by_key file.txt\n");
+		olaf_db_destroy(db);
+		olaf_config_destroy(config);
+		exit(-1);
+	}
+	
+	bool success = true;
+	
+	for(int arg_index = 2 ; arg_index < argc ; arg_index++){
+		const char* arg = argv[arg_index];
+		
+		// Check if this looks like a filename
+		if (olaf_looks_like_filename(arg)) {
+			// Try to process as a file
+			if (!olaf_process_keys_from_file(db, arg)) {
+				// If file processing fails, try as a regular key
+				printf("File processing failed, trying as key: %s\n", arg);
+				if (!olaf_process_single_key(db, arg)) {
+					success = false;
+				}
+			}
+		} else {
+			// Process as a single key
+			if (!olaf_process_single_key(db, arg)) {
+				success = false;
+			}
+		}
+	}
+
+	olaf_db_destroy(db);
+	olaf_config_destroy(config);
+	
+	if (!success) {
+		exit(-1);
+	}
+	
+	exit(0);
+	return 0;
+}
+
 int main(int argc, const char* argv[]){
 
 	if(argc < 2){
@@ -174,6 +450,8 @@ int main(int argc, const char* argv[]){
 		olaf_has(argc,argv);
 	} else if(strcmp(command,"store_cached") == 0){
 		olaf_store_cached(argc,argv);
+	} else if(strcmp(command,"query_by_key") == 0){
+		olaf_query_by_key(argc,argv);
 	} else {
 		fprintf(stderr,"%s Unknown command: \n",command);
 		olaf_print_help("Unknown command\n");

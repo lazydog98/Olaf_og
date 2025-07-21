@@ -388,6 +388,39 @@ def delete(index,length,audio_filename)
   end
 end
 
+def query_by_key
+  # Process arguments to extract keys and options
+  keys_and_files = []
+  verbose = false
+  
+  ARGV.each do |arg|
+    if arg == "--verbose"
+      verbose = true
+    elsif arg != "query_by_key"
+      keys_and_files << arg
+    end
+  end
+  
+  if keys_and_files.empty?
+    puts "Error: No keys or files provided."
+    puts "Usage: olaf query_by_key [--verbose] key1 key2... or olaf query_by_key [--verbose] file.txt"
+    exit(-1)
+  end
+  
+  # Build command arguments
+  cmd_args = [EXECUTABLE_LOCATION, 'query_by_key'] + keys_and_files
+  
+  # Execute the C command
+  stdout, stderr, status = Open3.capture3(*cmd_args)
+  
+  # Print results
+  puts stdout unless stdout.empty?
+  STDERR.puts stderr unless stderr.empty?
+  
+  # Exit with same status as C command
+  exit(status.exitstatus) if status.exitstatus != 0
+end
+
 
 
 #create the db folders unless it exist
@@ -606,6 +639,16 @@ commands = {
     :help => "[-f]",
     :needs_audio_files => false,
     :lambda => -> { clear(ARGV) }
+  },
+  "query_by_key" => {
+    :description => "Query the database using existing fingerprint keys.
+    \tSupports both hexadecimal (0x1234...) and decimal (1234...) formats.
+    \tCan read keys from files (one key per line, # for comments).
+    \t\t--verbose\t Include metadata (file paths, duration) in output.
+    ",
+    :help => "[--verbose] keys_or_files...",
+    :needs_audio_files => false,
+    :lambda => -> { query_by_key }
   },
 
 }
