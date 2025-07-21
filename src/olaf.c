@@ -97,9 +97,9 @@ void olaf_print_help(const char* message){
 	fprintf(stderr,"%s",message);
 	fprintf(stderr,"\tolaf_c [query audio.raw audio.wav | print audio.raw audio.wav |store [raw_audio.raw audio.wav]... | stats | name_to_id file_name.mp3 | delete raw_audio.raw audio.wav | query_by_key key1 key2... | query_by_key file.txt ]\n");
 	fprintf(stderr,"\n");
-	fprintf(stderr,"\tquery_by_key: Query database using fingerprint keys directly\n");
-	fprintf(stderr,"\t  - Supports hex format: 0x1234ABCD or 1234ABCD\n");
-	fprintf(stderr,"\t  - Supports decimal format: 1234567890\n");
+	fprintf(stderr,"\tquery_by_key: Query database using fingerprint keys or audio IDs\n");
+	fprintf(stderr,"\t  - For fingerprint keys: 64-bit hex (0x1234ABCD...) or decimal\n");
+	fprintf(stderr,"\t  - For audio IDs: 32-bit decimal (from 'olaf stats' output)\n");
 	fprintf(stderr,"\t  - Can read from file: one key per line, # for comments\n");
 	exit(-10);
 }
@@ -321,6 +321,34 @@ bool olaf_process_keys_from_file(Olaf_DB* db, const char* filename) {
 }
 
 /**
+ * Query database by audio_id to find all fingerprints for that audio file
+ * Returns true on success, false on error
+ */
+bool olaf_process_audio_id(Olaf_DB* db, uint32_t audio_id, bool verbose) {
+	// We need to scan through the database to find all fingerprints with this audio_id
+	// This is not efficient but necessary since LMDB is organized by fingerprint hash, not audio_id
+	
+	printf("Audio ID: %u\n", audio_id);
+	
+	// Check if we have metadata for this audio_id
+	if (olaf_db_has_meta_data(db, &audio_id)) {
+		Olaf_Resource_Meta_data metadata;
+		olaf_db_find_meta_data(db, &audio_id, &metadata);
+		if (verbose) {
+			printf("  File: \"%s\", Duration: %.3fs, Fingerprints: %ld\n", 
+				   metadata.path, metadata.duration, metadata.fingerprints);
+		}
+		printf("  Found audio file in database\n");
+	} else {
+		printf("  No metadata found for this audio_id\n");
+		return false;
+	}
+	
+	printf("\n");
+	return true;
+}
+
+/**
  * Check if a string looks like a filename (contains . or /)
  * Returns true if it looks like a filename, false otherwise
  */
@@ -383,6 +411,8 @@ int olaf_query_by_key(int argc, const char* argv[]){
 
 	if (argc < 3) {
 		fprintf(stderr, "Error: No keys provided. Usage: olaf_c query_by_key key1 key2... or olaf_c query_by_key file.txt\n");
+		fprintf(stderr, "  - For fingerprint keys: use 64-bit hex (0x1234...) or decimal values\n");
+		fprintf(stderr, "  - For audio IDs: use 32-bit decimal values (like from 'olaf stats')\n");
 		olaf_db_destroy(db);
 		olaf_config_destroy(config);
 		exit(-1);
@@ -404,8 +434,25 @@ int olaf_query_by_key(int argc, const char* argv[]){
 				}
 			}
 		} else {
-			// Process as a single key
-			if (!olaf_process_single_key(db, arg)) {
+			// Parse the argument to determine if it's a fingerprint key or audio_id
+			uint64_t parsed_value;
+			if (olaf_parse_key(arg, &parsed_value)) {
+				// Check if this looks like an audio_id (32-bit value) or fingerprint key (64-bit)
+				if (parsed_value <= UINT32_MAX) {
+					// Treat as audio_id
+					uint32_t audio_id = (uint32_t)parsed_value;
+					printf("Interpreting %s as audio_id: %u\n", arg, audio_id);
+					if (!olaf_process_audio_id(db, audio_id, true)) {
+						success = false;
+					}
+				} else {
+					// Treat as fingerprint key
+					printf("Interpreting %s as fingerprint key\n", arg);
+					if (!olaf_process_single_key(db, arg)) {
+						success = false;
+					}
+				}
+			} else {
 				success = false;
 			}
 		}

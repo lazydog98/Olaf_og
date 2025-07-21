@@ -641,8 +641,9 @@ commands = {
     :lambda => -> { clear(ARGV) }
   },
   "query_by_key" => {
-    :description => "Query the database using existing fingerprint keys.
-    \tSupports both hexadecimal (0x1234...) and decimal (1234...) formats.
+    :description => "Query the database using fingerprint keys or audio IDs.
+    \tFor fingerprint keys: use 64-bit hex (0x1234...) or decimal formats.
+    \tFor audio IDs: use 32-bit decimal values (from 'olaf stats' output).
     \tCan read keys from files (one key per line, # for comments).
     \t\t--verbose\t Include metadata (file paths, duration) in output.
     ",
