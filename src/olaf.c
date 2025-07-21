@@ -573,7 +573,7 @@ int olaf_query_by_key_with_similarity(int argc, const char* argv[]){
 							if (hamming_dist <= max_acceptable_hamming_distance) {
 								// Calculate similarity percentage (higher is better)
 								// Max possible hamming distance for 64-bit is 64
-								double similarity_percentage = ((double)(64 - hamming_dist) / 64.0) * 100.0;
+								double similarity_percentage = ((double)(34 - hamming_dist) / 34.0) * 100.0;
 								
 								uint32_t audio_id = (uint32_t)(matched_key & 0xFFFFFFFF);
 								uint32_t timestamp = (uint32_t)(matched_key >> 32);
