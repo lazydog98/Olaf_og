@@ -24,7 +24,7 @@ require 'find'
 
 DB_FOLDER = File.expand_path(File.join(Dir.home, '.olaf', 'db')) #File.expand_path("~/.olaf/db") #needs to be the same in the c code
 CACHE_FOLDER = File.expand_path(File.join(Dir.home, '.olaf', 'cache')) #File.expand_path("~/.olaf/cachetesting") #needs to be the same in the c code
-EXECUTABLE_LOCATION = File.expand_path(File.join(File.dirname(__FILE__), "olaf_c.exe"))
+EXECUTABLE_LOCATION = File.expand_path(File.join(File.dirname(__FILE__), "pre-built", "olaf_c.exe"))
 
 
 CHECK_INCOMING_AUDIO = true
