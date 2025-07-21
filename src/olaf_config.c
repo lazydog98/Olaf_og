@@ -79,10 +79,10 @@ Olaf_Config* olaf_config_default(void){
 	//max freq distance between two event points for fingerprint
 	config->maxFreqDistance = 128; //bins for fingerprint construction
 	
-	config->maxFingerprints=300;
+	config->maxFingerprints=1000;
 
 	//maximum number of results
-	config->maxResults = 50;
+	config->maxResults = 200;
 
 	//The range around a hash to search
 	config->searchRange = 5;
@@ -101,7 +101,7 @@ Olaf_Config* olaf_config_default(void){
 	config->printResultEvery = 0;//seconds
 	
 	//number of matches (hash collisions) 
-	config->maxDBCollisions = 2000;//for larger data sets use around 2000
+	config->maxDBCollisions = 100000;//future-proof for 500k+ songs
 
 	return config;
 }
@@ -169,6 +169,19 @@ Olaf_Config* olaf_config_mem(void){
 	config->keepMatchesFor = 0;//seconds
 
 	config->verbose = false;
+
+	return config;
+}
+
+Olaf_Config* olaf_config_large_db(void){
+	Olaf_Config* config =  olaf_config_default();
+
+	//For very large databases, increase collision handling
+	config->maxDBCollisions = 150000;
+	
+	//Increase other limits for large datasets
+	config->maxResults = 300;
+	config->maxFingerprints = 1500;
 
 	return config;
 }
