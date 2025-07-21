@@ -229,7 +229,6 @@ int olaf_hamming_distance(uint64_t a, uint64_t b) {
  * Returns true on success, false on error
  */
 bool olaf_process_single_key_with_metadata(Olaf_DB* db, const char* key_string, bool verbose, bool perform_similarity_search) {
-	printf("DEBUG: olaf_process_single_key_with_metadata - perform_similarity_search: %d\n", perform_similarity_search);
 	uint64_t key;
 
 	
@@ -337,7 +336,6 @@ bool olaf_process_single_key(Olaf_DB* db, const char* key_string) {
  * Returns true on success, false on error
  */
 bool olaf_process_keys_from_file_with_metadata(Olaf_DB* db, const char* filename, bool verbose, bool perform_similarity_search) {
-	printf("DEBUG: olaf_process_keys_from_file_with_metadata - perform_similarity_search: %d\n", perform_similarity_search);
 	FILE* file = fopen(filename, "r");
 
 	if (!file) {

@@ -39,7 +39,7 @@ AUDIO_CONVERT_COMMAND = proc{ |input, output| %W[ffmpeg -hide_banner -y -logleve
 AUDIO_CONVERT_FROM_RAW_COMMAND = proc{ |input, output| %W[ffmpeg -hide_banner -y -loglevel panic -ac 1 -ar #{TARGET_SAMPLE_RATE} -f f32le -acodec pcm_f32le -i #{input} #{output}] }
 AUDIO_CONVERT_COMMAND_WITH_START_DURATION = proc{ |input, output, start, duration| %W[ffmpeg -hide_banner -y -loglevel panic -ss #{start} -i #{input} -t #{duration} -ac 1 -ar #{TARGET_SAMPLE_RATE} -f f32le -acodec pcm_f32le #{output}] }
 MIC_INPUT = %W[ffmpeg -hide_banner -loglevel panic -f avfoundation -i none:default -ac 1 -ar #{TARGET_SAMPLE_RATE} -f f32le -acodec pcm_f32le pipe:1]
-
+AUDIO_WHITE_NOISE_COMMAND = proc{ |output| %W[ffmpeg -hide_banner -y -loglevel panic -f lavfi -i anullsrc=r=16000 -t 10 -ac 1 -ar #{TARGET_SAMPLE_RATE} -f f32le -acodec pcm_f32le #{output}] }
 
 class OlafResultLine
     attr_reader :valid, :empty_match
@@ -237,6 +237,18 @@ def with_converted_audio_part(audio_filename,start,duration)
   tempfile.unlink
 end
 
+def with_white_noise_audio
+  tempfile = Tempfile.new(['olaf_white_noise', '.raw'])
+  convert_command = AUDIO_WHITE_NOISE_COMMAND[tempfile.path]
+  system(*convert_command)
+
+  yield tempfile
+
+  #remove the temp file afer use
+  tempfile.close
+  tempfile.unlink
+end
+
 def to_raw(index,length,audio_filename)
   basename = File.basename(audio_filename,File.extname(audio_filename))
   raw_audio_filename = "olaf_audio_#{basename}.raw"
@@ -247,6 +259,7 @@ def to_raw(index,length,audio_filename)
     puts "#{index}/#{length},#{File.basename audio_filename},#{raw_audio_filename}\n"
   end
 end
+
 
 def to_wav(index,length,raw_audio_filename)
   output_filename = File.basename(raw_audio_filename,File.extname(raw_audio_filename)) + ".wav"
@@ -328,17 +341,15 @@ def cache(index,length,audio_filename)
   end
 end
 
-def store(index,length,audio_filename)
+def store(index,length,raw_audio_filename, orig_audio_filename)
   #Do not store same audio twice
-  if(CHECK_INCOMING_AUDIO && audio_file_duration(audio_filename) == 0)
-    puts "#{index}/#{length} #{File.basename audio_filename} INVALID audio file? Duration zero."
-  elsif (SKIP_DUPLICATES && has(audio_filename))
-    puts "#{index}/#{length} #{File.basename audio_filename} SKIP: already stored audio "
+  if(CHECK_INCOMING_AUDIO && audio_file_duration(orig_audio_filename) == 0)
+    puts "#{index}/#{length} #{File.basename orig_audio_filename} INVALID audio file? Duration zero."
+  elsif (SKIP_DUPLICATES && has(orig_audio_filename))
+    puts "#{index}/#{length} #{File.basename orig_audio_filename} SKIP: already stored audio "
   else
-    with_converted_audio(audio_filename) do |tempfile|
-      stdout, stderr, status = Open3.capture3(EXECUTABLE_LOCATION, 'store', tempfile.path, audio_filename)
-      puts "#{index}/#{length} #{File.basename audio_filename} #{stderr.strip}"
-    end
+    stdout, stderr, status = Open3.capture3(EXECUTABLE_LOCATION, 'store', raw_audio_filename, orig_audio_filename)
+    puts "#{index}/#{length} #{File.basename orig_audio_filename} #{stderr.strip}"
   end
 end
 
@@ -374,6 +385,16 @@ def clear(arguments)
   if(delete_db)
     puts "Clear the database folder."
     FileUtils.rm Dir.glob("#{DB_FOLDER}/*") if File.exist? DB_FOLDER
+
+    # Initialize the database by adding and removing a placeholder
+    puts "Initializing database..."
+    with_white_noise_audio do |tempfile|
+      # Use a dummy path for storing and deleting
+      dummy_path = "olaf_init_placeholder.raw"
+      store(1, 1, tempfile.path, dummy_path) # index, length, raw_audio_path, orig_path
+      delete(1, 1, tempfile.path, dummy_path) # index, length, raw_audio_path, orig_path
+    end
+    puts "Database initialized."
   end
 
   if(delete_cache)
@@ -382,11 +403,15 @@ def clear(arguments)
   end
 end
 
-def delete(index,length,audio_filename)
-  #Do not store same audio twice
-  with_converted_audio(audio_filename) do |tempfile|
-    stdout, stderr, status = Open3.capture3(EXECUTABLE_LOCATION, 'delete', tempfile.path, audio_filename)
-    puts "#{index}/#{length} #{File.basename audio_filename} #{stderr.strip}"
+def delete(index,length,raw_audio_filename, orig_audio_filename)
+  stdout, stderr, status = Open3.capture3(EXECUTABLE_LOCATION, 'delete', raw_audio_filename, orig_audio_filename)
+  puts "#{index}/#{length} #{File.basename orig_audio_filename} #{stderr.strip}"
+end
+
+def delete_by_path(index, length, path_to_delete)
+  with_white_noise_audio do |tempfile|
+    stdout, stderr, status = Open3.capture3(EXECUTABLE_LOCATION, 'delete', tempfile.path, path_to_delete)
+    puts "#{index}/#{length} #{File.basename path_to_delete} #{stderr.strip}"
   end
 end
 
@@ -577,7 +602,9 @@ commands = {
     :needs_audio_files => true,
     :lambda => -> do
       audio_files.each_with_index do |audio_file, index|
-        store(index+1,audio_files.length,audio_file)
+        with_converted_audio(audio_file) do |tempfile|
+          store(index+1,audio_files.length,tempfile.path,audio_file)
+        end
       end
     end
   },
@@ -621,7 +648,19 @@ commands = {
     :needs_audio_files => true,
     :lambda => -> do
       audio_files.each_with_index do |audio_file, index|
-        delete(index+1, audio_files.length, audio_file)
+        with_converted_audio(audio_file) do |tempfile|
+          delete(index+1, audio_files.length, tempfile.path, audio_file)
+        end
+      end
+    end
+  },
+  "delete_by_path" => {
+    :description => "Deletes audio entries from the index by their original path.",
+    :help => "path_to_audio_file...",
+    :needs_audio_files => true,
+    :lambda => -> do
+      audio_files.each_with_index do |audio_file, index|
+        delete_by_path(index+1, audio_files.length, audio_file)
       end
     end
   },
@@ -695,7 +734,9 @@ commands = {
 
       unless skip_store
         audio_files.each_with_index do |audio_file, index|
-          store(index+1, audio_files.length, audio_file)
+          with_converted_audio(audio_file) do |tempfile|
+            store(index+1, audio_files.length, tempfile.path, audio_file)
+          end
         end
       end
 
