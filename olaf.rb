@@ -22,9 +22,11 @@ require 'tempfile'
 require 'open3'
 require 'find'
 
-DB_FOLDER = File.expand_path("~/.olaf/db") #needs to be the same in the c code
-CACHE_FOLDER = File.expand_path("~/.olaf/cache") #needs to be the same in the c code
-EXECUTABLE_LOCATION = "/usr/local/bin/olaf_c"
+DB_FOLDER = File.expand_path(File.join(Dir.home, '.olaf', 'db')) #File.expand_path("~/.olaf/db") #needs to be the same in the c code
+CACHE_FOLDER = File.expand_path(File.join(Dir.home, '.olaf', 'cache')) #File.expand_path("~/.olaf/cachetesting") #needs to be the same in the c code
+EXECUTABLE_LOCATION = File.expand_path(File.join(File.dirname(__FILE__), "olaf_c.exe"))
+
+
 CHECK_INCOMING_AUDIO = true
 SKIP_DUPLICATES = true
 FRAGMENT_DURATION_IN_SECONDS = 30
@@ -410,15 +412,32 @@ def query_by_key
   # Build command arguments
   cmd_args = [EXECUTABLE_LOCATION, 'query_by_key'] + keys_and_files
   
+  # Check if executable exists
+  unless File.exist?(EXECUTABLE_LOCATION)
+    puts "Error: Olaf executable not found at #{EXECUTABLE_LOCATION}"
+    puts "Make sure Olaf is compiled and installed correctly"
+    exit(-1)
+  end
+  
   # Execute the C command
-  stdout, stderr, status = Open3.capture3(*cmd_args)
-  
-  # Print results
-  puts stdout unless stdout.empty?
-  STDERR.puts stderr unless stderr.empty?
-  
-  # Exit with same status as C command
-  exit(status.exitstatus) if status.exitstatus != 0
+  begin
+    stdout, stderr, status = Open3.capture3(*cmd_args)
+    
+    # Print results
+    puts stdout unless stdout.empty?
+    STDERR.puts stderr unless stderr.empty?
+    
+    # Exit with same status as C command
+    if status && status.exitstatus
+      exit(status.exitstatus) if status.exitstatus != 0
+    else
+      puts "Error: Command execution failed"
+      exit(-1)
+    end
+  rescue => e
+    puts "Error executing command: #{e.message}"
+    exit(-1)
+  end
 end
 
 

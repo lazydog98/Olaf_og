@@ -320,137 +320,8 @@ bool olaf_process_keys_from_file(Olaf_DB* db, const char* filename) {
 	return olaf_process_keys_from_file_with_metadata(db, filename, false);
 }
 
-/**
- * Structure to hold similarity match results
- */
-typedef struct {
-	uint32_t audio_id;
-	uint32_t match_count;
-	float similarity_score;
-	char file_path[512];
-	float duration;
-} Olaf_Similarity_Match;
-
-/**
- * Find similar audio files by sampling fingerprints from the target audio_id
- * This leverages existing fingerprint matching without full database scan
- */
-size_t olaf_find_similar_audio(Olaf_DB* db, uint32_t target_audio_id, Olaf_Similarity_Match* matches, size_t max_matches) {
-	// Sample fingerprints by scanning a portion of the database for this audio_id
-	const size_t sample_size = 100; // Sample up to 100 fingerprints
-	uint64_t sample_keys[sample_size];
-	size_t found_samples = 0;
-	
-	// Scan through database to find fingerprints belonging to target_audio_id
-	// We'll scan in chunks to find some representative fingerprints
-	const size_t chunk_size = 1000;
-	uint64_t results[chunk_size];
-	uint64_t current_key = 0;
-	
-	// Find sample fingerprints from the target audio
-	while (found_samples < sample_size && current_key < UINT64_MAX) {
-		size_t found = olaf_db_find(db, current_key, current_key + chunk_size - 1, results, chunk_size);
-		
-		if (found == 0) {
-			current_key += chunk_size;
-			if (current_key < chunk_size) break; // Overflow
-			continue;
-		}
-		
-		// Look for fingerprints from our target audio_id
-		for (size_t i = 0; i < found && found_samples < sample_size; i++) {
-			uint64_t value = results[i];
-			uint32_t audio_id = (uint32_t)(value & 0xFFFFFFFF);
-			
-			if (audio_id == target_audio_id) {
-				// Calculate the fingerprint key from the value
-				// This is a reverse calculation - we need the actual key
-				// For now, we'll use a simpler approach
-				sample_keys[found_samples] = current_key + i;
-				found_samples++;
-			}
-		}
-		
-		current_key += chunk_size;
-		if (current_key < chunk_size) break; // Overflow
-	}
-	
-	if (found_samples == 0) {
-		return 0; // No fingerprints found for this audio_id
-	}
-	
-	// Now use these sample fingerprints to find similar audio files
-	uint32_t match_counts[1000] = {0}; // Track matches per audio_id
-	uint32_t audio_ids[1000];
-	size_t unique_audio_count = 0;
-	
-	// Query each sample fingerprint to find matches
-	for (size_t i = 0; i < found_samples; i++) {
-		uint64_t query_results[100];
-		size_t num_matches = olaf_db_find(db, sample_keys[i], sample_keys[i], query_results, 100);
-		
-		for (size_t j = 0; j < num_matches; j++) {
-			uint64_t match_value = query_results[j];
-			uint32_t match_audio_id = (uint32_t)(match_value & 0xFFFFFFFF);
-			
-			// Skip self-matches
-			if (match_audio_id == target_audio_id) continue;
-			
-			// Find or add this audio_id to our tracking
-			bool found_existing = false;
-			for (size_t k = 0; k < unique_audio_count; k++) {
-				if (audio_ids[k] == match_audio_id) {
-					match_counts[k]++;
-					found_existing = true;
-					break;
-				}
-			}
-			
-			if (!found_existing && unique_audio_count < 1000) {
-				audio_ids[unique_audio_count] = match_audio_id;
-				match_counts[unique_audio_count] = 1;
-				unique_audio_count++;
-			}
-		}
-	}
-	
-	// Convert to similarity matches and sort by match count
-	size_t result_count = 0;
-	for (size_t i = 0; i < unique_audio_count && result_count < max_matches; i++) {
-		if (match_counts[i] > 0) {
-			matches[result_count].audio_id = audio_ids[i];
-			matches[result_count].match_count = match_counts[i];
-			matches[result_count].similarity_score = (float)match_counts[i] / (float)found_samples * 100.0f;
-			
-			// Get metadata if available
-			if (olaf_db_has_meta_data(db, &audio_ids[i])) {
-				Olaf_Resource_Meta_data metadata;
-				olaf_db_find_meta_data(db, &audio_ids[i], &metadata);
-				strncpy(matches[result_count].file_path, metadata.path, sizeof(matches[result_count].file_path) - 1);
-				matches[result_count].file_path[sizeof(matches[result_count].file_path) - 1] = '\0';
-				matches[result_count].duration = metadata.duration;
-			} else {
-				strcpy(matches[result_count].file_path, "<unknown>");
-				matches[result_count].duration = 0.0f;
-			}
-			
-			result_count++;
-		}
-	}
-	
-	// Simple bubble sort by similarity score (descending)
-	for (size_t i = 0; i < result_count - 1; i++) {
-		for (size_t j = 0; j < result_count - i - 1; j++) {
-			if (matches[j].similarity_score < matches[j + 1].similarity_score) {
-				Olaf_Similarity_Match temp = matches[j];
-				matches[j] = matches[j + 1];
-				matches[j + 1] = temp;
-			}
-		}
-	}
-	
-	return result_count;
-}
+// Similarity matching temporarily disabled to fix segmentation fault
+// Will be re-implemented with a safer approach
 
 /**
  * Query database by audio_id to find all fingerprints for that audio file
@@ -467,6 +338,7 @@ bool olaf_process_audio_id(Olaf_DB* db, uint32_t audio_id, bool verbose) {
 		if (verbose) {
 			printf("  File: \"%s\", Duration: %.3fs\n", metadata.path, metadata.duration);
 			printf("  Fingerprints: %ld (from metadata)\n", metadata.fingerprints);
+			printf("  Note: Similarity matching temporarily disabled\n");
 		} else {
 			printf("  File: \"%s\", Duration: %.3fs, Fingerprints: %ld\n", 
 				   metadata.path, metadata.duration, metadata.fingerprints);
@@ -474,21 +346,9 @@ bool olaf_process_audio_id(Olaf_DB* db, uint32_t audio_id, bool verbose) {
 		
 		printf("  Found audio file in database\n");
 		
-		// Find similar audio files
-		printf("\n  Finding similar audio files...\n");
-		Olaf_Similarity_Match similar_matches[10];
-		size_t num_similar = olaf_find_similar_audio(db, audio_id, similar_matches, 10);
-		
-		if (num_similar > 0) {
-			printf("  Similar audio files found:\n");
-			for (size_t i = 0; i < num_similar; i++) {
-				printf("    %zu. Audio ID: %u, Similarity: %.1f%% (%u matches), File: \"%s\"\n",
-					   i + 1, similar_matches[i].audio_id, similar_matches[i].similarity_score,
-					   similar_matches[i].match_count, similar_matches[i].file_path);
-			}
-		} else {
-			printf("  No similar audio files found\n");
-		}
+		// Similarity matching temporarily disabled to fix segmentation fault
+		// printf("\n  Finding similar audio files...\n");
+		// Will be re-implemented with a safer approach
 		
 	} else {
 		printf("  No metadata found for this audio_id\n");
